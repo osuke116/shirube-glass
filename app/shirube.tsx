@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useMemo,useRef,useState,useCallback} from 'react';
 import {ArrowUpRight,ArrowLeft,ArrowDownToLine,ArrowUpFromLine,Plus,Search,Check,ChevronRight,ChevronDown,X,Bookmark,Clock3,FolderOpen,SlidersHorizontal,Cloud,CloudOff,RefreshCw,FileText,Sparkles,Trash2,RotateCcw,PenLine,Link2,MoreHorizontal,ShieldCheck,CalendarDays,Copy,CheckCheck,WifiOff} from 'lucide-react';
-import {KINDS,Note,Archive,Kind,today,titleOf,parseTags,norm,newNote,normalizeNote,importArchive,mergeRemote,conflictCopy,formatDate,safeUrl} from '../lib/model';
+import {KINDS,Note,Archive,Kind,today,titleOf,parseTags,norm,validDate,newNote,normalizeNote,importArchive,mergeRemote,conflictCopy,formatDate,safeUrl} from '../lib/model';
 import {listLocal,saveLocal} from '../lib/local-store';
 type Session={user:{id:string;name:string}|null;signIn:string;signOut:string};
 type View='capture'|'history'|'library'|'manage';
@@ -43,7 +43,7 @@ export default function Shirube(){
    try{device.current=localStorage.getItem('shirube-device')||crypto.randomUUID();localStorage.setItem('shirube-device',device.current);setMotion(localStorage.getItem('shirube-motion')!=='off')}catch{}
    try{const [n,a]=await Promise.all([listLocal<Note>('notes','guest'),listLocal<Archive>('archives','guest')]);if(!alive)return;applyNotes(n);applyArchives(a);setGuestCount(n.filter(x=>!x.deleted).length);try{if(!draftTouched.current)setBody(localStorage.getItem('shirube-draft:guest')||'')}catch{}}
    catch(e){if(alive)setStorageError(friendlyError(e))}finally{if(alive)setLoading(false)}
-   try{const res=await fetch('/api/session',{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!res.ok)return;const s=await res.json() as Session;if(!alive)return;sessionRef.current=s;setSession(s);if(s.user){const scope='user:'+s.user.id;const [n,a,g]=await Promise.all([listLocal<Note>('notes',scope),listLocal<Archive>('archives',scope),listLocal<Note>('notes','guest')]);if(!alive)return;owner.current=scope;applyNotes(n);applyArchives(a);setGuestCount(g.filter(x=>!x.deleted).length);try{if(!draftTouched.current)setBody(localStorage.getItem('shirube-draft:'+scope)||'')}catch{};await sync()}}
+   try{const res=await fetch('/api/session',{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!res.ok)return;const s=await res.json() as Session;if(!alive)return;sessionRef.current=s;setSession(s);if(s.user){const scope='user:'+s.user.id;const [n,a,g]=await Promise.all([listLocal<Note>('notes',scope),listLocal<Archive>('archives',scope),listLocal<Note>('notes','guest')]);if(!alive)return;owner.current=scope;applyNotes(n);applyArchives(a);setGuestCount(g.filter(x=>!x.deleted&&!n.some(y=>y.id==='guest-'+x.id)).length);try{if(!draftTouched.current)setBody(localStorage.getItem('shirube-draft:'+scope)||'')}catch{};await sync()}}
    catch{if(alive)setSyncStatus('この端末に保存')}
   }
   start();setOnline(navigator.onLine);const connection=()=>{setOnline(navigator.onLine);if(navigator.onLine)sync()};window.addEventListener('online',connection);window.addEventListener('offline',connection);const timer=setInterval(sync,20000);const focus=()=>sync();window.addEventListener('focus',focus);
@@ -64,7 +64,7 @@ export default function Shirube(){
  async function updateNote(n:Note,changes:Partial<Note>,text=''){const updated={...n,...changes,updatedAt:new Date().toISOString(),dirty:true};try{await persist(updated,text);if(selection?.type==='note'&&selection.value.id===n.id)setSelection({type:'note',value:updated})}catch(e){say(friendlyError(e))}}
  async function favoriteArchive(a:Archive){const changed={...a,starred:!a.starred};try{await saveLocal('archives',owner.current,[changed]);applyArchives(archivesRef.current.map(x=>x.id===a.id?changed:x));setSelection({type:'archive',value:changed})}catch(e){say(friendlyError(e))}}
  async function copy(value:string){try{await navigator.clipboard.writeText(value);say('コピーしました')}catch{say('コピーできませんでした。表示されている場所を選択してコピーしてください。')}}
- async function migrateGuest(){if(!session.user)return;try{const guest=await listLocal<Note>('notes','guest');const incoming=guest.map(n=>({...n,id:crypto.randomUUID(),version:0,dirty:true,updatedAt:new Date().toISOString()}));await saveLocal('notes',owner.current,incoming);applyNotes([...notesRef.current,...incoming]);setGuestCount(0);say('端末の記録を引き継ぎました');sync()}catch(e){say(friendlyError(e))}}
+ async function migrateGuest(){if(!session.user)return;try{const guest=await listLocal<Note>('notes','guest');const incoming=guest.filter(n=>!notesRef.current.some(x=>x.id==='guest-'+n.id)).map(n=>({...n,id:'guest-'+n.id,version:0,dirty:true,updatedAt:new Date().toISOString()}));await saveLocal('notes',owner.current,incoming);applyNotes([...notesRef.current,...incoming]);setGuestCount(0);say('端末の記録を引き継ぎました');sync()}catch(e){say(friendlyError(e))}}
  async function importFiles(files:FileList|null){
   if(!files?.length)return;setImportBusy(true);setImportSummary('');const incomingNotes:Note[]=[];const incomingArchives:Archive[]=[];
   try{
@@ -75,11 +75,11 @@ export default function Shirube(){
      if(data.type==='shirube-backup'&&data.version===2){if(!Array.isArray(data.notes)||!Array.isArray(data.archives))throw Error('バックアップの形式を確認してください。');for(const x of data.notes)incomingNotes.push({...normalizeNote(x),version:0,dirty:true});for(const x of data.archives)incomingArchives.push(importArchive(x))}
      else if(Array.isArray(data.records)){if(data.records.length>20000)throw Error('一度に取り込める資料は2万件までです。');for(const row of data.records)incomingArchives.push(importArchive(row))}
      else throw Error('しるべのバックアップ、または旧版のcatalog.jsonを選んでください。');
-    }else if(/\.(md|markdown|txt)$/i.test(file.name)){const n=newNote(raw.slice(0,200000),'資料',today(),[],device.current);n.title=file.name.replace(/\.[^.]+$/,'');const m=raw.match(/(?:作成(?:・編集)?日|会話日時)[：:]\s*(\d{4})[-年](\d{1,2})[-月](\d{1,2})/);if(m)n.date=m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');incomingNotes.push(n)}else throw Error('JSON・Markdown・テキストを選んでください。');
+    }else if(/\.(md|markdown|txt)$/i.test(file.name)){const n=newNote(raw.slice(0,200000),'資料',today(),[],device.current);n.title=file.name.replace(/\.[^.]+$/,'');const m=raw.match(/(?:作成(?:・編集)?日|会話日時)[：:]\s*(\d{4})[-年](\d{1,2})[-月](\d{1,2})/);if(m){const parsed=m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');if(validDate(parsed))n.date=parsed;}incomingNotes.push(n)}else throw Error('JSON・Markdown・テキストを選んでください。');
    }
    const noteMap=new Map(notesRef.current.map(n=>[n.id,n]));for(const n of incomingNotes){const existing=noteMap.get(n.id);if(!existing)noteMap.set(n.id,n);else if(n.updatedAt>existing.updatedAt)noteMap.set(n.id,{...n,version:existing.version,dirty:true})}
-   const archiveMap=new Map(archivesRef.current.map(a=>[a.id,a]));incomingArchives.forEach(a=>archiveMap.set(a.id,a));
-   await saveLocal('notes',owner.current,[...noteMap.values()]);for(let i=0;i<incomingArchives.length;i+=150)await saveLocal('archives',owner.current,incomingArchives.slice(i,i+150));applyNotes([...noteMap.values()]);applyArchives([...archiveMap.values()]);setImportSummary('記録 '+incomingNotes.length.toLocaleString()+'件・資料 '+incomingArchives.length.toLocaleString()+'件を取り込みました。');say('取り込みが完了しました');sync();
+   const archiveMap=new Map(archivesRef.current.map(a=>[a.id,a]));incomingArchives.forEach(a=>archiveMap.set(a.id,{...a,starred:a.starred||archiveMap.get(a.id)?.starred||false}));
+   await saveLocal('notes',owner.current,[...noteMap.values()]);for(let i=0;i<incomingArchives.length;i+=150)await saveLocal('archives',owner.current,incomingArchives.slice(i,i+150).map(a=>archiveMap.get(a.id)!));applyNotes([...noteMap.values()]);applyArchives([...archiveMap.values()]);setImportSummary('記録 '+incomingNotes.length.toLocaleString()+'件・資料 '+incomingArchives.length.toLocaleString()+'件を取り込みました。');say('取り込みが完了しました');sync();
   }catch(e){setImportSummary(friendlyError(e));say(friendlyError(e))}finally{setImportBusy(false);if(importInput.current)importInput.current.value=''}
  }
  function backup(){download('shirube-backup-'+today()+'.json',JSON.stringify({type:'shirube-backup',version:2,exportedAt:new Date().toISOString(),notes:notesRef.current,archives:archivesRef.current},null,2),'application/json');say('バックアップを書き出しました')}
