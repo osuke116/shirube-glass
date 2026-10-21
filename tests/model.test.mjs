@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {newNote,normalizeNote,validDate,safeUrl,mergeRemote,conflictCopy,importArchive,norm,parseTags} from '../lib/model.ts';
+test('実在する日付だけ受け付ける',()=>{assert.equal(validDate('2026-02-30'),false);assert.equal(validDate('2024-02-29'),true);assert.throws(()=>newNote('x','メモ','2026-02-30'))});
+test('取り込んだ資料の危険なURLを開かない',()=>{for(const s of ['javascript:alert(1)','data:text/html,x','file:///private/test'])assert.equal(safeUrl(s),'');assert.equal(safeUrl('https://example.com'),'https://example.com/');assert.equal(importArchive({url:'javascript:x'}).url,'')});
+test('同期中の未送信編集は上書きされない',()=>{const n=newNote('端末で編集');const remote={...n,body:'他端末',version:2,dirty:false};assert.equal(mergeRemote([n],[remote])[0].body,n.body);assert.equal(mergeRemote([{...n,dirty:false}],[remote])[0].body,'他端末')});
+test('同時編集は別IDで両方残せる',()=>{const n=newNote('大切な本文');const copy=conflictCopy(n);assert.notEqual(copy.id,n.id);assert.equal(copy.body,n.body);assert.equal(copy.version,0);assert.equal(copy.dirty,true)});
+test('旧一覧の本文・日付根拠・保存場所を維持',()=>{const n=importArchive({id:'legacy',title:'資料',text:'本文',ext:'MD',date:'2026-10-01',dateBasis:'ファイルの作成日時',path:'/example/note.md'});assert.equal(n.body,'本文');assert.equal(n.date,'2026-10-01');assert.equal(n.basis,'ファイルの作成日時');assert.equal(n.path,'/example/note.md')});
+test('バックアップをJSONで往復しても記録を維持',()=>{const n=newNote('改行\n本文','制作物','2026-10-21',['作品']);assert.deepEqual(normalizeNote(JSON.parse(JSON.stringify(n))),n)});
+test('日本語検索は全角半角を正規化',()=>{assert.equal(norm('ＡＢＣ'),norm('abc'));assert.deepEqual(parseTags('入試、作品 #入試'),['入試','作品'])});
+test('不正・過大な記録を拒否',()=>{assert.throws(()=>normalizeNote({id:'a',body:'x'.repeat(200001),date:'2026-10-21'}));assert.throws(()=>normalizeNote(null))});

@@ -1,0 +1,1 @@
+{"records":[{"id":"test-archive","title":"サンプルの保存場所","text":"ライブラリ検索の確認本文","ext":"MD","date":"2026-10-01","dateBasis":"サンプルの日付","path":"/example/notes/sample.md","collection":"動作確認"},{"id":"test-site","title":"公開サイトのサンプル","text":"外部リンクの検証用","ext":"SITE","date":"2026-10-02","url":"https://namethatui.com/","collection":"動作確認"}]}
